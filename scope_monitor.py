@@ -119,7 +119,8 @@ def send_telegram(text):
 
 def build_telegram_message(commits, domains_added, domains_removed,
                             wildcards_added, h1_new, h1_removed,
-                            bc_new, bc_removed, first_date, last_date):
+                            bc_new, bc_removed, ig_new, ig_removed,
+                            ywh_new, ywh_removed, first_date, last_date):
     lines = [f"🎯 <b>BB Scope Report</b>"]
     lines.append(f"📅 {first_date} → {last_date} UTC  |  {len(commits)} commit\n")
 
@@ -129,6 +130,12 @@ def build_telegram_message(commits, domains_added, domains_removed,
     if bc_new:
         for name in bc_new:
             lines.append(f"🆕 <b>YENİ PROQRAM (BC):</b> {name}")
+    if ig_new:
+        for name in ig_new:
+            lines.append(f"🆕 <b>YENİ PROQRAM (Intigriti):</b> {name}")
+    if ywh_new:
+        for name in ywh_new:
+            lines.append(f"🆕 <b>YENİ PROQRAM (YWH):</b> {name}")
 
     if domains_added:
         lines.append(f"\n✅ <b>Yeni domenler (+{len(domains_added)}):</b>")
@@ -149,6 +156,10 @@ def build_telegram_message(commits, domains_added, domains_removed,
         lines.append(f"❌ H1 silindi: {', '.join(h1_removed)}")
     if bc_removed:
         lines.append(f"❌ BC silindi: {', '.join(bc_removed)}")
+    if ig_removed:
+        lines.append(f"❌ Intigriti silindi: {', '.join(ig_removed)}")
+    if ywh_removed:
+        lines.append(f"❌ YWH silindi: {', '.join(ywh_removed)}")
 
     return "\n".join(lines)
 
@@ -183,6 +194,8 @@ def main():
     wildcards_added, wildcards_removed = [], []
     h1_new, h1_removed, h1_modified, h1_stats = [], [], [], (0, 0)
     bc_new, bc_removed, bc_modified, bc_stats = [], [], [], (0, 0)
+    ig_new, ig_removed, ig_modified, ig_stats = [], [], [], (0, 0)
+    ywh_new, ywh_removed, ywh_modified, ywh_stats = [], [], [], (0, 0)
 
     if "data/domains.txt" in files:
         domains_added, domains_removed = parse_patch_lines(
@@ -203,6 +216,16 @@ def main():
         f = files["data/bugcrowd_data.json"]
         bc_new, bc_removed, bc_modified = parse_program_names(f.get("patch", ""))
         bc_stats = (f.get("additions", 0), f.get("deletions", 0))
+
+    if "data/intigriti_data.json" in files:
+        f = files["data/intigriti_data.json"]
+        ig_new, ig_removed, ig_modified = parse_program_names(f.get("patch", ""))
+        ig_stats = (f.get("additions", 0), f.get("deletions", 0))
+
+    if "data/yeswehack_data.json" in files:
+        f = files["data/yeswehack_data.json"]
+        ywh_new, ywh_removed, ywh_modified = parse_program_names(f.get("patch", ""))
+        ywh_stats = (f.get("additions", 0), f.get("deletions", 0))
 
     def date(c):
         return c["commit"]["committer"]["date"][:16].replace("T", " ")
@@ -275,6 +298,34 @@ def main():
             L.append(f"DƏYİŞİKLİK: {', '.join(bc_modified)}")
         L.append(f"Fayl dəyişikliyi: +{bc_stats[0]} / -{bc_stats[1]} sətir")
 
+    if ig_stats[0] or ig_stats[1]:
+        L.append("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        L.append(" INTIGRITI PROQRAM DƏYİŞİKLİKLƏRİ")
+        L.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        if ig_new:
+            L.append(f"🆕 YENİ PROQRAM(LAR):")
+            for name in ig_new:
+                L.append(f"  ★ {name}")
+        if ig_removed:
+            L.append(f"SİLİNDİ: {', '.join(ig_removed)}")
+        if ig_modified:
+            L.append(f"DƏYİŞİKLİK: {', '.join(ig_modified)}")
+        L.append(f"Fayl dəyişikliyi: +{ig_stats[0]} / -{ig_stats[1]} sətir")
+
+    if ywh_stats[0] or ywh_stats[1]:
+        L.append("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        L.append(" YESWEHACK PROQRAM DƏYİŞİKLİKLƏRİ")
+        L.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        if ywh_new:
+            L.append(f"🆕 YENİ PROQRAM(LAR):")
+            for name in ywh_new:
+                L.append(f"  ★ {name}")
+        if ywh_removed:
+            L.append(f"SİLİNDİ: {', '.join(ywh_removed)}")
+        if ywh_modified:
+            L.append(f"DƏYİŞİKLİK: {', '.join(ywh_modified)}")
+        L.append(f"Fayl dəyişikliyi: +{ywh_stats[0]} / -{ywh_stats[1]} sətir")
+
     L.append("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     L.append("Mənbə: https://github.com/arkadiyt/bounty-targets-data")
     L.append(f"Commits: {last_sha[:7]}...{current_sha[:7]}")
@@ -285,7 +336,8 @@ def main():
     tg_text = build_telegram_message(
         commits, domains_added, domains_removed,
         wildcards_added, h1_new, h1_removed,
-        bc_new, bc_removed, first_date, last_date
+        bc_new, bc_removed, ig_new, ig_removed,
+        ywh_new, ywh_removed, first_date, last_date
     )
     send_telegram(tg_text)
 
