@@ -9,6 +9,8 @@ REPO = "arkadiyt/bounty-targets-data"
 STATE_FILE = "state.json"
 GMAIL_USER = "eminovemil90@gmail.com"
 GMAIL_PASS = os.environ.get("GMAIL_APP_PASSWORD")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 
 def fetch(url):
@@ -46,9 +48,16 @@ def parse_patch_lines(patch):
 
 
 def parse_program_names(patch):
-    added, removed = [], []
+    """
+    Patch-dən proqram adlarını çıxart.
+    Yalnız + olan amma - olmayan adlar → YENİ proqram.
+    Hər iki işarədə olan adlar → dəyişiklik (meta update), yeni deyil.
+    """
+    added_names, removed_names = [], []
     if not patch:
-        return added, removed
+        return added_names, removed_names, []
+
+    raw_added, raw_removed = set(), set()
     for line in patch.split("\n"):
         if '"name"' not in line:
             continue
@@ -57,12 +66,18 @@ def parse_program_names(patch):
             if not name:
                 continue
             if line.startswith("+"):
-                added.append(name)
+                raw_added.add(name)
             elif line.startswith("-"):
-                removed.append(name)
+                raw_removed.add(name)
         except Exception:
             pass
-    return added, removed
+
+    # Həm + həm - olan adlar = yalnız dəyişiklik (yeni proqram deyil)
+    truly_new = sorted(raw_added - raw_removed)
+    truly_removed = sorted(raw_removed - raw_added)
+    modified = sorted(raw_added & raw_removed)
+
+    return truly_new, truly_removed, modified
 
 
 def send_email(subject, body):
@@ -80,6 +95,64 @@ def send_email(subject, body):
     print(f"Email göndərildi: {subject}")
 
 
+def send_telegram(text):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram credentials not set — skipping")
+        return
+    payload = json.dumps({
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML"
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as r:
+        resp = json.loads(r.read())
+    if resp.get("ok"):
+        print("Telegram bildirişi göndərildi")
+    else:
+        print(f"Telegram xətası: {resp}")
+
+
+def build_telegram_message(commits, domains_added, domains_removed,
+                            wildcards_added, h1_new, h1_removed,
+                            bc_new, bc_removed, first_date, last_date):
+    lines = [f"🎯 <b>BB Scope Report</b>"]
+    lines.append(f"📅 {first_date} → {last_date} UTC  |  {len(commits)} commit\n")
+
+    if h1_new:
+        for name in h1_new:
+            lines.append(f"🆕 <b>YENİ PROQRAM (H1):</b> {name}")
+    if bc_new:
+        for name in bc_new:
+            lines.append(f"🆕 <b>YENİ PROQRAM (BC):</b> {name}")
+
+    if domains_added:
+        lines.append(f"\n✅ <b>Yeni domenler (+{len(domains_added)}):</b>")
+        for d in domains_added[:10]:
+            lines.append(f"  + {d}")
+        if len(domains_added) > 10:
+            lines.append(f"  ... +{len(domains_added) - 10} daha")
+
+    if wildcards_added:
+        lines.append(f"\n🌐 <b>Yeni wildcard-lar (+{len(wildcards_added)}):</b>")
+        for w in wildcards_added:
+            lines.append(f"  + {w}")
+
+    if domains_removed:
+        lines.append(f"\n🗑 Silindi: {len(domains_removed)} domen")
+
+    if h1_removed:
+        lines.append(f"❌ H1 silindi: {', '.join(h1_removed)}")
+    if bc_removed:
+        lines.append(f"❌ BC silindi: {', '.join(bc_removed)}")
+
+    return "\n".join(lines)
+
+
 def main():
     state = load_state()
     last_sha = state.get("last_sha")
@@ -91,7 +164,7 @@ def main():
     print(f"current_sha: {current_sha}")
 
     if last_sha is None:
-        print("İlk run — baseline SHA saxlanır, email göndərilmir.")
+        print("İlk run — baseline SHA saxlanır, bildiriş göndərilmir.")
         save_state({"last_sha": current_sha})
         return
 
@@ -108,25 +181,27 @@ def main():
 
     domains_added, domains_removed = [], []
     wildcards_added, wildcards_removed = [], []
-    h1_added, h1_removed, h1_stats = [], [], (0, 0)
-    bc_added, bc_removed, bc_stats = [], [], (0, 0)
+    h1_new, h1_removed, h1_modified, h1_stats = [], [], [], (0, 0)
+    bc_new, bc_removed, bc_modified, bc_stats = [], [], [], (0, 0)
 
     if "data/domains.txt" in files:
-        f = files["data/domains.txt"]
-        domains_added, domains_removed = parse_patch_lines(f.get("patch", ""))
+        domains_added, domains_removed = parse_patch_lines(
+            files["data/domains.txt"].get("patch", "")
+        )
 
     if "data/wildcards.txt" in files:
-        f = files["data/wildcards.txt"]
-        wildcards_added, wildcards_removed = parse_patch_lines(f.get("patch", ""))
+        wildcards_added, wildcards_removed = parse_patch_lines(
+            files["data/wildcards.txt"].get("patch", "")
+        )
 
     if "data/hackerone_data.json" in files:
         f = files["data/hackerone_data.json"]
-        h1_added, h1_removed = parse_program_names(f.get("patch", ""))
+        h1_new, h1_removed, h1_modified = parse_program_names(f.get("patch", ""))
         h1_stats = (f.get("additions", 0), f.get("deletions", 0))
 
     if "data/bugcrowd_data.json" in files:
         f = files["data/bugcrowd_data.json"]
-        bc_added, bc_removed = parse_program_names(f.get("patch", ""))
+        bc_new, bc_removed, bc_modified = parse_program_names(f.get("patch", ""))
         bc_stats = (f.get("additions", 0), f.get("deletions", 0))
 
     def date(c):
@@ -136,6 +211,7 @@ def main():
     last_date = date(commits[-1]) if commits else "?"
     subject = f"🎯 BB Scope Report — {len(commits)} commit ({first_date} → {last_date} UTC)"
 
+    # ── Email ──────────────────────────────────────────────────────────────
     L = []
     L.append(f"Son yoxlamadan bəri {len(commits)} commit edildi.\n")
 
@@ -175,20 +251,28 @@ def main():
         L.append("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         L.append(" HACKERONE PROQRAM DƏYİŞİKLİKLƏRİ")
         L.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        if h1_added:
-            L.append(f"YENİ: {', '.join(h1_added)}")
+        if h1_new:
+            L.append(f"🆕 YENİ PROQRAM(LAR):")
+            for name in h1_new:
+                L.append(f"  ★ {name}")
         if h1_removed:
             L.append(f"SİLİNDİ: {', '.join(h1_removed)}")
+        if h1_modified:
+            L.append(f"DƏYİŞİKLİK: {', '.join(h1_modified)}")
         L.append(f"Fayl dəyişikliyi: +{h1_stats[0]} / -{h1_stats[1]} sətir")
 
     if bc_stats[0] or bc_stats[1]:
         L.append("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         L.append(" BUGCROWD PROQRAM DƏYİŞİKLİKLƏRİ")
         L.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        if bc_added:
-            L.append(f"YENİ: {', '.join(bc_added)}")
+        if bc_new:
+            L.append(f"🆕 YENİ PROQRAM(LAR):")
+            for name in bc_new:
+                L.append(f"  ★ {name}")
         if bc_removed:
             L.append(f"SİLİNDİ: {', '.join(bc_removed)}")
+        if bc_modified:
+            L.append(f"DƏYİŞİKLİK: {', '.join(bc_modified)}")
         L.append(f"Fayl dəyişikliyi: +{bc_stats[0]} / -{bc_stats[1]} sətir")
 
     L.append("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -196,6 +280,15 @@ def main():
     L.append(f"Commits: {last_sha[:7]}...{current_sha[:7]}")
 
     send_email(subject, "\n".join(L))
+
+    # ── Telegram ───────────────────────────────────────────────────────────
+    tg_text = build_telegram_message(
+        commits, domains_added, domains_removed,
+        wildcards_added, h1_new, h1_removed,
+        bc_new, bc_removed, first_date, last_date
+    )
+    send_telegram(tg_text)
+
     save_state({"last_sha": current_sha})
 
 
