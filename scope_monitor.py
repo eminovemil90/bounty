@@ -32,6 +32,63 @@ def save_state(data):
         json.dump(data, f, indent=2)
 
 
+def fetch_raw_text(path, sha):
+    """raw.githubusercontent.com-dan fayl məzmununu yüklə (patch hədd aşdıqda)."""
+    url = f"https://raw.githubusercontent.com/{REPO}/{sha}/{path}"
+    req = urllib.request.Request(url, headers={"User-Agent": "bounty-monitor/1.0"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return r.read().decode("utf-8")
+
+
+def diff_platform_scopes(old_text, new_text, scope_field):
+    """
+    İki JSON mətni arasında scope dəyişikliklərini tap.
+    GitHub patch truncate olduqda fallback kimi istifadə olunur.
+    """
+    name_re = re.compile(r'"name"\s*:\s*"([^"]+)"')
+    scope_re = re.compile(rf'"{re.escape(scope_field)}"\s*:\s*"([^"]*)"')
+
+    def extract(text):
+        result = {}
+        cur = None
+        for line in text.split("\n"):
+            nm = name_re.search(line)
+            if nm:
+                cur = nm.group(1).strip()
+                result.setdefault(cur, set())
+            sm = scope_re.search(line)
+            if sm and cur:
+                v = sm.group(1).strip()
+                if v:
+                    result[cur].add(v)
+        return result
+
+    old_map = extract(old_text)
+    new_map = extract(new_text)
+    old_names = set(old_map)
+    new_names = set(new_map)
+
+    new_progs, removed_progs, scope_changes = {}, {}, {}
+
+    for n in new_names - old_names:
+        scopes = sorted(s for s in new_map[n] if is_web_scope(s))
+        if scopes:
+            new_progs[n] = {"added": scopes, "removed": []}
+
+    for n in old_names - new_names:
+        scopes = sorted(s for s in old_map[n] if is_web_scope(s))
+        if scopes:
+            removed_progs[n] = {"added": [], "removed": scopes}
+
+    for n in old_names & new_names:
+        added = sorted(s for s in new_map[n] - old_map[n] if is_web_scope(s))
+        removed = sorted(s for s in old_map[n] - new_map[n] if is_web_scope(s))
+        if added or removed:
+            scope_changes[n] = {"added": added, "removed": removed}
+
+    return new_progs, removed_progs, scope_changes
+
+
 def parse_patch_lines(patch):
     """domains.txt / wildcards.txt üçün — sadə sətir əlavə/silmə."""
     added, removed = [], []
@@ -54,19 +111,28 @@ _REVERSED_TLDS = {
     "de", "fr", "uk", "jp", "cn", "ru", "br", "in", "us",
 }
 
+# https:// ilə başlasa da web hacking hədəfi olmayan URL-lər
+_NON_WEB_URL_PATTERNS = (
+    "play.google.com/store",
+    "itunes.apple.com/",
+    "apps.apple.com/",
+    "github.com/",
+    "gitlab.com/",
+)
+
 
 def is_web_scope(val):
-    """Yalnız web-ə aid scope-ları saxla (Android/iOS/IoT paketlərini süzgəcdən keçir)."""
+    """Yalnız web-ə aid scope-ları saxla (Android/iOS/IoT/repo-ları süzgəcdən keçir)."""
     if not val:
         return False
-    # URL və wildcard domenler həmişə web-dir
     if val.startswith(("http://", "https://", "*.")):
+        low = val.lower()
+        if any(pat in low for pat in _NON_WEB_URL_PATTERNS):
+            return False
         return True
-    # Nöqtəsiz dəyərlər domen deyil
     if "." not in val:
         return False
     # Android/iOS paket adı: com.example.app, org.company.sdk kimi
-    # — reversed TLD ilə başlayır, 3+ hissəsi var, slash/port yoxdur
     parts = val.split(".")
     if (len(parts) >= 3
             and parts[0].lower() in _REVERSED_TLDS
@@ -124,7 +190,9 @@ def parse_platform_patch(patch, scope_field):
                     key = "added" if prefix == "+" else "removed"
                     data[current_name][key].append(val)
 
-    truly_new = {n: data[n] for n in (name_added - name_removed) if n in data}
+    # Yalnız web scope-u olan proqramları göstər (Android/iOS-only proqramları gizlət)
+    truly_new = {n: data[n] for n in (name_added - name_removed)
+                 if n in data and data[n]["added"]}
     truly_removed = {n: data[n] for n in (name_removed - name_added) if n in data}
     scope_changes = {
         n: data[n]
@@ -313,33 +381,34 @@ def main():
     ig_new, ig_removed, ig_scope, ig_stats = {}, {}, {}, (0, 0)
     ywh_new, ywh_removed, ywh_scope, ywh_stats = {}, {}, {}, (0, 0)
 
-    if "data/hackerone_data.json" in files:
-        f = files["data/hackerone_data.json"]
-        h1_new, h1_removed, h1_scope = parse_platform_patch(
-            f.get("patch", ""), "asset_identifier"
-        )
-        h1_stats = (f.get("additions", 0), f.get("deletions", 0))
+    def process_platform(filename, scope_field):
+        """
+        Platform faylını parse et.
+        Patch varsa parse_platform_patch(), yoxdursa raw fetch + diff_platform_scopes().
+        """
+        if filename not in files:
+            return {}, {}, {}, (0, 0)
+        f = files[filename]
+        stats = (f.get("additions", 0), f.get("deletions", 0))
+        patch = f.get("patch", "")
+        if patch:
+            n, r, s = parse_platform_patch(patch, scope_field)
+        else:
+            # GitHub API patch-i truncate etdi — raw faylları çək və diff et
+            print(f"{filename}: patch yoxdur, raw diff istifadə olunur...")
+            try:
+                old_text = fetch_raw_text(filename, last_sha)
+                new_text = fetch_raw_text(filename, current_sha)
+                n, r, s = diff_platform_scopes(old_text, new_text, scope_field)
+            except Exception as e:
+                print(f"{filename} raw diff xətası: {e}")
+                n, r, s = {}, {}, {}
+        return n, r, s, stats
 
-    if "data/bugcrowd_data.json" in files:
-        f = files["data/bugcrowd_data.json"]
-        bc_new, bc_removed, bc_scope = parse_platform_patch(
-            f.get("patch", ""), "target"
-        )
-        bc_stats = (f.get("additions", 0), f.get("deletions", 0))
-
-    if "data/intigriti_data.json" in files:
-        f = files["data/intigriti_data.json"]
-        ig_new, ig_removed, ig_scope = parse_platform_patch(
-            f.get("patch", ""), "endpoint"
-        )
-        ig_stats = (f.get("additions", 0), f.get("deletions", 0))
-
-    if "data/yeswehack_data.json" in files:
-        f = files["data/yeswehack_data.json"]
-        ywh_new, ywh_removed, ywh_scope = parse_platform_patch(
-            f.get("patch", ""), "target"
-        )
-        ywh_stats = (f.get("additions", 0), f.get("deletions", 0))
+    h1_new,  h1_removed,  h1_scope,  h1_stats  = process_platform("data/hackerone_data.json",  "asset_identifier")
+    bc_new,  bc_removed,  bc_scope,  bc_stats  = process_platform("data/bugcrowd_data.json",    "target")
+    ig_new,  ig_removed,  ig_scope,  ig_stats  = process_platform("data/intigriti_data.json",   "endpoint")
+    ywh_new, ywh_removed, ywh_scope, ywh_stats = process_platform("data/yeswehack_data.json",   "target")
 
     def date(c):
         return c["commit"]["committer"]["date"][:16].replace("T", " ")
