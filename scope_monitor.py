@@ -111,7 +111,6 @@ _REVERSED_TLDS = {
     "de", "fr", "uk", "jp", "cn", "ru", "br", "in", "us",
 }
 
-# https:// ilə başlasa da web hacking hədəfi olmayan URL-lər
 _NON_WEB_URL_PATTERNS = (
     "play.google.com/store",
     "itunes.apple.com/",
@@ -120,10 +119,15 @@ _NON_WEB_URL_PATTERNS = (
     "gitlab.com/",
 )
 
+_MOBILE_SEGMENTS = {"android", "ios"}
+
 
 def is_web_scope(val):
     """Yalnız web-ə aid scope-ları saxla (Android/iOS/IoT/repo-ları süzgəcdən keçir)."""
     if not val:
+        return False
+    # Boşluqlu dəyərlər domen deyil (text description)
+    if " " in val:
         return False
     if val.startswith(("http://", "https://", "*.")):
         low = val.lower()
@@ -132,10 +136,16 @@ def is_web_scope(val):
         return True
     if "." not in val:
         return False
-    # Android/iOS paket adı: com.example.app, org.company.sdk kimi
     parts = val.split(".")
-    if (len(parts) >= 3
+    # Reversed TLD paket: com.example, com.example.app, org.sdk kimi (2+ hissə)
+    if (len(parts) >= 2
             and parts[0].lower() in _REVERSED_TLDS
+            and "/" not in val
+            and ":" not in val):
+        return False
+    # Ölkə-reversed paket: nz.co.company.android.*, au.com.product.ios.* kimi
+    if (len(parts) >= 4
+            and any(p.lower() in _MOBILE_SEGMENTS for p in parts)
             and "/" not in val
             and ":" not in val):
         return False
