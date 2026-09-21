@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import smtplib
 import urllib.request
 from email.mime.text import MIMEText
@@ -58,19 +59,20 @@ def parse_program_names(patch):
         return added_names, removed_names, []
 
     raw_added, raw_removed = set(), set()
+    pattern = re.compile(r'"name"\s*:\s*"([^"]+)"')
     for line in patch.split("\n"):
         if '"name"' not in line:
             continue
-        try:
-            name = line.split('"name"')[1].split('"')[2]
-            if not name:
-                continue
-            if line.startswith("+"):
-                raw_added.add(name)
-            elif line.startswith("-"):
-                raw_removed.add(name)
-        except Exception:
-            pass
+        m = pattern.search(line)
+        if not m:
+            continue
+        name = m.group(1).strip()
+        if not name:
+            continue
+        if line.startswith("+"):
+            raw_added.add(name)
+        elif line.startswith("-"):
+            raw_removed.add(name)
 
     # Həm + həm - olan adlar = yalnız dəyişiklik (yeni proqram deyil)
     truly_new = sorted(raw_added - raw_removed)
