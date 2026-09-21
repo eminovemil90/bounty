@@ -50,7 +50,7 @@ def parse_patch_lines(patch):
 
 
 _REVERSED_TLDS = {
-    "com", "org", "io", "net", "co", "app", "me", "gov", "edu",
+    "com", "org", "io", "net", "gov", "edu",
     "de", "fr", "uk", "jp", "cn", "ru", "br", "in", "us",
 }
 
