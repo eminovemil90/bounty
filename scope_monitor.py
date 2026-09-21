@@ -49,6 +49,33 @@ def parse_patch_lines(patch):
     return added, removed
 
 
+_REVERSED_TLDS = {
+    "com", "org", "io", "net", "co", "app", "me", "gov", "edu",
+    "de", "fr", "uk", "jp", "cn", "ru", "br", "in", "us",
+}
+
+
+def is_web_scope(val):
+    """Yalnız web-ə aid scope-ları saxla (Android/iOS/IoT paketlərini süzgəcdən keçir)."""
+    if not val:
+        return False
+    # URL və wildcard domenler həmişə web-dir
+    if val.startswith(("http://", "https://", "*.")):
+        return True
+    # Nöqtəsiz dəyərlər domen deyil
+    if "." not in val:
+        return False
+    # Android/iOS paket adı: com.example.app, org.company.sdk kimi
+    # — reversed TLD ilə başlayır, 3+ hissəsi var, slash/port yoxdur
+    parts = val.split(".")
+    if (len(parts) >= 3
+            and parts[0].lower() in _REVERSED_TLDS
+            and "/" not in val
+            and ":" not in val):
+        return False
+    return True
+
+
 def parse_platform_patch(patch, scope_field):
     """
     Platform JSON patch-ini parse et.
@@ -88,12 +115,12 @@ def parse_platform_patch(patch, scope_field):
             elif prefix == "-":
                 name_removed.add(current_name)
 
-        # Scope dəyişikliyini izlə (yalnız + və - sətirlərdə)
+        # Scope dəyişikliyini izlə (yalnız + və - sətirlərdə, web-only)
         if prefix in ("+", "-") and current_name:
             sm = scope_re.search(content)
             if sm:
                 val = sm.group(1).strip()
-                if val:
+                if val and is_web_scope(val):
                     key = "added" if prefix == "+" else "removed"
                     data[current_name][key].append(val)
 
