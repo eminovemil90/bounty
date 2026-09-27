@@ -346,7 +346,7 @@ def run_nuclei(all_new_domains):
     result = subprocess.run(
         ["/root/go/bin/nuclei",
          "-l", domains_file,
-         "-severity", "critical,high",
+         "-severity", "critical,high,medium",
          "-silent",
          "-timeout", "10",
          "-retries", "2",
@@ -361,6 +361,10 @@ def run_nuclei(all_new_domains):
             tg_nuclei += f"\n\n... +{len(findings)-30} daha tapıntı"
         send_telegram(tg_nuclei)
         print(f"Nuclei: {len(findings)} tapıntı Telegram-a göndərildi")
+
+        email_body = f"Nuclei {len(findings)} tapıntı tapdı:\n\n" + "\n".join(findings)
+        send_email("🔍 Nuclei Nəticələri", email_body)
+        print("Nuclei: nəticələr Gmail-ə göndərildi")
     else:
         print("Nuclei: tapıntı yoxdur")
 
