@@ -255,24 +255,29 @@ def send_telegram(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram credentials not set — skipping")
         return
-    if len(text) > 4000:
-        text = text[:3990] + "\n...(kəsildi)"
-    payload = json.dumps({
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML"
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=15) as r:
-        resp = json.loads(r.read())
-    if resp.get("ok"):
-        print("Telegram bildirişi göndərildi")
-    else:
-        print(f"Telegram xətası: {resp}")
+    chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
+    for i, chunk in enumerate(chunks):
+        if len(chunks) > 1:
+            chunk = f"({i+1}/{len(chunks)})\n" + chunk
+        payload = json.dumps({
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": chunk,
+            "parse_mode": "HTML"
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                resp = json.loads(r.read())
+            if resp.get("ok"):
+                print(f"Telegram bildirişi göndərildi ({i+1}/{len(chunks)})")
+            else:
+                print(f"Telegram xətası: {resp}")
+        except Exception as e:
+            print(f"Telegram xətası: {e}")
 
 
 def build_telegram_message(commits, domains_added, domains_removed,
