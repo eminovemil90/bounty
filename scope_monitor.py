@@ -1,10 +1,15 @@
+from dotenv import load_dotenv
+load_dotenv("/opt/bounty/.env")
+
 import json
 import os
 import re
 import smtplib
+import subprocess
 import urllib.request
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from urllib.parse import urlparse
 
 REPO = "arkadiyt/bounty-targets-data"
 STATE_FILE = "state.json"
@@ -33,7 +38,6 @@ def save_state(data):
 
 
 def fetch_raw_text(path, sha):
-    """raw.githubusercontent.com-dan fayl məzmununu yüklə (patch hədd aşdıqda)."""
     url = f"https://raw.githubusercontent.com/{REPO}/{sha}/{path}"
     req = urllib.request.Request(url, headers={"User-Agent": "bounty-monitor/1.0"})
     with urllib.request.urlopen(req, timeout=60) as r:
@@ -41,10 +45,6 @@ def fetch_raw_text(path, sha):
 
 
 def diff_platform_scopes(old_text, new_text, scope_field):
-    """
-    İki JSON mətni arasında scope dəyişikliklərini tap.
-    GitHub patch truncate olduqda fallback kimi istifadə olunur.
-    """
     name_re = re.compile(r'"name"\s*:\s*"([^"]+)"')
     scope_re = re.compile(rf'"{re.escape(scope_field)}"\s*:\s*"([^"]*)"')
 
@@ -90,7 +90,6 @@ def diff_platform_scopes(old_text, new_text, scope_field):
 
 
 def parse_patch_lines(patch):
-    """domains.txt / wildcards.txt üçün — sadə sətir əlavə/silmə."""
     added, removed = [], []
     if not patch:
         return added, removed
@@ -123,10 +122,8 @@ _MOBILE_SEGMENTS = {"android", "ios"}
 
 
 def is_web_scope(val):
-    """Yalnız web-ə aid scope-ları saxla (Android/iOS/IoT/repo-ları süzgəcdən keçir)."""
     if not val:
         return False
-    # Boşluqlu dəyərlər domen deyil (text description)
     if " " in val:
         return False
     if val.startswith(("http://", "https://", "*.")):
@@ -137,13 +134,11 @@ def is_web_scope(val):
     if "." not in val:
         return False
     parts = val.split(".")
-    # Reversed TLD paket: com.example, com.example.app, org.sdk kimi (2+ hissə)
     if (len(parts) >= 2
             and parts[0].lower() in _REVERSED_TLDS
             and "/" not in val
             and ":" not in val):
         return False
-    # Ölkə-reversed paket: nz.co.company.android.*, au.com.product.ios.* kimi
     if (len(parts) >= 4
             and any(p.lower() in _MOBILE_SEGMENTS for p in parts)
             and "/" not in val
@@ -153,17 +148,6 @@ def is_web_scope(val):
 
 
 def parse_platform_patch(patch, scope_field):
-    """
-    Platform JSON patch-ini parse et.
-    scope_field: HackerOne→"asset_identifier", Intigriti→"endpoint",
-                 Bugcrowd/YesWeHack→"target"
-
-    Qaytarır:
-      new_programs    : {name: [scope, ...]}   — yalnız + sətirlərdə olan
-      removed_programs: {name: [scope, ...]}   — yalnız - sətirlərdə olan
-      scope_changes   : {name: {'added': [...], 'removed': [...]}}
-                        — mövcud proqramlarda scope dəyişikliyi
-    """
     if not patch:
         return {}, {}, {}
 
@@ -173,15 +157,14 @@ def parse_platform_patch(patch, scope_field):
     current_name = None
     name_added = set()
     name_removed = set()
-    data = {}  # name -> {'added': [], 'removed': []}
+    data = {}
 
     for line in patch.split("\n"):
         if not line:
             continue
-        prefix = line[0]   # '+', '-', ' ', '@', '\\'
+        prefix = line[0]
         content = line[1:]
 
-        # Proqram adını izlə (istənilən prefix-dən)
         nm = name_re.search(content)
         if nm:
             current_name = nm.group(1).strip()
@@ -191,7 +174,6 @@ def parse_platform_patch(patch, scope_field):
             elif prefix == "-":
                 name_removed.add(current_name)
 
-        # Scope dəyişikliyini izlə (yalnız + və - sətirlərdə, web-only)
         if prefix in ("+", "-") and current_name:
             sm = scope_re.search(content)
             if sm:
@@ -200,7 +182,6 @@ def parse_platform_patch(patch, scope_field):
                     key = "added" if prefix == "+" else "removed"
                     data[current_name][key].append(val)
 
-    # Yalnız web scope-u olan proqramları göstər (Android/iOS-only proqramları gizlət)
     truly_new = {n: data[n] for n in (name_added - name_removed)
                  if n in data and data[n]["added"]}
     truly_removed = {n: data[n] for n in (name_removed - name_added) if n in data}
@@ -215,7 +196,6 @@ def parse_platform_patch(patch, scope_field):
 
 
 def _format_platform_section(title, new_progs, removed_progs, scope_changes, stats):
-    """Email üçün bir platforma bölməsi."""
     if not stats[0] and not stats[1]:
         return []
     L = []
@@ -275,7 +255,6 @@ def send_telegram(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram credentials not set — skipping")
         return
-    # Telegram 4096 simvol limiti
     if len(text) > 4000:
         text = text[:3990] + "\n...(kəsildi)"
     payload = json.dumps({
@@ -299,9 +278,6 @@ def send_telegram(text):
 def build_telegram_message(commits, domains_added, domains_removed,
                             wildcards_added, wildcards_removed,
                             platforms, first_date, last_date):
-    """
-    platforms: list of (label, new_progs, removed_progs, scope_changes)
-    """
     lines = ["🎯 <b>BB Scope Report</b>"]
     lines.append(f"📅 {first_date} → {last_date} UTC  |  {len(commits)} commit\n")
 
@@ -346,6 +322,49 @@ def build_telegram_message(commits, domains_added, domains_removed,
     return "\n".join(lines)
 
 
+def run_nuclei(all_new_domains):
+    if not all_new_domains:
+        return
+
+    normalized = set()
+    for d in all_new_domains:
+        d = d.lstrip("*.")
+        if d.startswith(("http://", "https://")):
+            d = urlparse(d).netloc or d
+        if d:
+            normalized.add(d)
+
+    if not normalized:
+        return
+
+    domains_file = "/opt/bounty/new_domains.txt"
+    with open(domains_file, "w") as nf:
+        for d in sorted(normalized):
+            nf.write(d + "\n")
+
+    print(f"Nuclei: {len(normalized)} domain taranır...")
+    result = subprocess.run(
+        ["/root/go/bin/nuclei",
+         "-l", domains_file,
+         "-severity", "critical,high",
+         "-silent",
+         "-timeout", "10",
+         "-retries", "2",
+         "-rate-limit", "50"],
+        capture_output=True, text=True, timeout=3600
+    )
+
+    findings = [l for l in result.stdout.strip().split("\n") if l.strip()]
+    if findings:
+        tg_nuclei = "🔍 <b>Nuclei Nəticələri</b>\n\n" + "\n".join(findings[:30])
+        if len(findings) > 30:
+            tg_nuclei += f"\n\n... +{len(findings)-30} daha tapıntı"
+        send_telegram(tg_nuclei)
+        print(f"Nuclei: {len(findings)} tapıntı Telegram-a göndərildi")
+    else:
+        print("Nuclei: tapıntı yoxdur")
+
+
 def main():
     state = load_state()
     last_sha = state.get("last_sha")
@@ -372,7 +391,6 @@ def main():
     commits = compare.get("commits", [])
     files = {f["filename"]: f for f in compare.get("files", [])}
 
-    # ── domains.txt / wildcards.txt ────────────────────────────────────────
     domains_added, domains_removed = [], []
     wildcards_added, wildcards_removed = [], []
 
@@ -385,17 +403,12 @@ def main():
             files["data/wildcards.txt"].get("patch", "")
         )
 
-    # ── Platform JSON faylları ─────────────────────────────────────────────
     h1_new, h1_removed, h1_scope, h1_stats = {}, {}, {}, (0, 0)
     bc_new, bc_removed, bc_scope, bc_stats = {}, {}, {}, (0, 0)
     ig_new, ig_removed, ig_scope, ig_stats = {}, {}, {}, (0, 0)
     ywh_new, ywh_removed, ywh_scope, ywh_stats = {}, {}, {}, (0, 0)
 
     def process_platform(filename, scope_field):
-        """
-        Platform faylını parse et.
-        Patch varsa parse_platform_patch(), yoxdursa raw fetch + diff_platform_scopes().
-        """
         if filename not in files:
             return {}, {}, {}, (0, 0)
         f = files[filename]
@@ -404,7 +417,6 @@ def main():
         if patch:
             n, r, s = parse_platform_patch(patch, scope_field)
         else:
-            # GitHub API patch-i truncate etdi — raw faylları çək və diff et
             print(f"{filename}: patch yoxdur, raw diff istifadə olunur...")
             try:
                 old_text = fetch_raw_text(filename, last_sha)
@@ -427,7 +439,6 @@ def main():
     last_date = date(commits[-1]) if commits else "?"
     subject = f"🎯 BB Scope Report — {len(commits)} commit ({first_date} → {last_date} UTC)"
 
-    # ── Email ──────────────────────────────────────────────────────────────
     L = []
     L.append(f"Son yoxlamadan bəri {len(commits)} commit edildi.\n")
 
@@ -474,7 +485,6 @@ def main():
 
     send_email(subject, "\n".join(L))
 
-    # ── Telegram ───────────────────────────────────────────────────────────
     platforms = [
         ("H1", h1_new, h1_removed, h1_scope),
         ("BC", bc_new, bc_removed, bc_scope),
@@ -487,6 +497,17 @@ def main():
         platforms, first_date, last_date
     )
     send_telegram(tg_text)
+
+    # ── Nuclei Scan ────────────────────────────────────────────────────────
+    all_new = set()
+    all_new.update(domains_added)
+    for info in (h1_new, bc_new, ig_new, ywh_new):
+        for pi in info.values():
+            all_new.update(pi.get("added", []))
+    for info in (h1_scope, bc_scope, ig_scope, ywh_scope):
+        for pi in info.values():
+            all_new.update(pi.get("added", []))
+    run_nuclei(all_new)
 
     save_state({"last_sha": current_sha})
 
