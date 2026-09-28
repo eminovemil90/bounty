@@ -342,27 +342,29 @@ def run_nuclei(all_new_domains):
     if not normalized:
         return
 
-    domains_file = "/opt/bounty/new_domains.txt"
-    with open(domains_file, "w") as nf:
-        for d in sorted(normalized):
-            nf.write(d + "\n")
-
+    domains = sorted(normalized)
+    BATCH_SIZE = 10
+    batches = [domains[i:i+BATCH_SIZE] for i in range(0, len(domains), BATCH_SIZE)]
     results_file = "/opt/bounty/nuclei_results.txt"
-    print(f"Nuclei: {len(normalized)} domain taranır (background)...")
-    # Background-da işlət — scope_monitor-u bloklamasın
-    subprocess.Popen(
-        ["/root/go/bin/nuclei",
-         "-l", domains_file,
-         "-severity", "critical,high,medium",
-         "-o", results_file,
-         "-silent",
-         "-timeout", "10",
-         "-retries", "2",
-         "-rate-limit", "50"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
-    print(f"Nuclei background-da başladıldı → nəticələr: {results_file}")
+
+    print(f"Nuclei: {len(domains)} domain → {len(batches)} batch ({BATCH_SIZE}/batch) parallel başladılır...")
+
+    for i, batch in enumerate(batches):
+        batch_file = f"/opt/bounty/batch_{i:03d}.txt"
+        with open(batch_file, "w") as f:
+            f.write("\n".join(batch) + "\n")
+        subprocess.Popen(
+            ["/root/go/bin/nuclei",
+             "-l", batch_file,
+             "-severity", "critical,high,medium",
+             "-o", results_file,
+             "-silent", "-timeout", "10",
+             "-retries", "2", "-rate-limit", "25"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+
+    print(f"{len(batches)} nuclei batch background-da başladıldı → nəticələr: {results_file}")
 
 
 def main():
