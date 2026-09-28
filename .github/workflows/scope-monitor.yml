@@ -1,9 +1,7 @@
 name: Bounty Scope Monitor
 
 on:
-  schedule:
-    - cron: '0 */8 * * *'   # hər 8 saatda bir (UTC) — günə 3 dəfə
-  workflow_dispatch:          # GitHub-dan əl ilə işlətmək üçün
+  workflow_dispatch:          # yalnız əl ilə işlətmək üçün (VPS cron ilə əvəz edildi)
 
 jobs:
   monitor:
