@@ -347,31 +347,22 @@ def run_nuclei(all_new_domains):
         for d in sorted(normalized):
             nf.write(d + "\n")
 
-    print(f"Nuclei: {len(normalized)} domain taranır...")
-    result = subprocess.run(
+    results_file = "/opt/bounty/nuclei_results.txt"
+    print(f"Nuclei: {len(normalized)} domain taranır (background)...")
+    # Background-da işlət — scope_monitor-u bloklamasın
+    subprocess.Popen(
         ["/root/go/bin/nuclei",
          "-l", domains_file,
          "-severity", "critical,high,medium",
+         "-o", results_file,
          "-silent",
          "-timeout", "10",
          "-retries", "2",
          "-rate-limit", "50"],
-        capture_output=True, text=True, timeout=3600
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
     )
-
-    findings = [l for l in result.stdout.strip().split("\n") if l.strip()]
-    if findings:
-        tg_nuclei = "🔍 <b>Nuclei Nəticələri</b>\n\n" + "\n".join(findings[:30])
-        if len(findings) > 30:
-            tg_nuclei += f"\n\n... +{len(findings)-30} daha tapıntı"
-        send_telegram(tg_nuclei)
-        print(f"Nuclei: {len(findings)} tapıntı Telegram-a göndərildi")
-
-        email_body = f"Nuclei {len(findings)} tapıntı tapdı:\n\n" + "\n".join(findings)
-        send_email("🔍 Nuclei Nəticələri", email_body)
-        print("Nuclei: nəticələr Gmail-ə göndərildi")
-    else:
-        print("Nuclei: tapıntı yoxdur")
+    print(f"Nuclei background-da başladıldı → nəticələr: {results_file}")
 
 
 def main():
@@ -507,6 +498,9 @@ def main():
     )
     send_telegram(tg_text)
 
+    # SHA-nı nuclei-dən ƏVVƏL yenilə (nuclei uğursuz olsa belə növbəti run düzgün işləsin)
+    save_state({"last_sha": current_sha})
+
     # ── Nuclei Scan ────────────────────────────────────────────────────────
     all_new = set()
     all_new.update(domains_added)
@@ -517,8 +511,6 @@ def main():
         for pi in info.values():
             all_new.update(pi.get("added", []))
     run_nuclei(all_new)
-
-    save_state({"last_sha": current_sha})
 
 
 if __name__ == "__main__":
