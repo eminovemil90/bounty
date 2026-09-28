@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 load_dotenv("/opt/bounty/.env")
 
+import glob
 import json
 import os
 import re
@@ -346,6 +347,10 @@ def run_nuclei(all_new_domains):
     BATCH_SIZE = 50
     batches = [domains[i:i+BATCH_SIZE] for i in range(0, len(domains), BATCH_SIZE)]
     results_file = "/opt/bounty/nuclei_results.txt"
+
+    # Köhnə batch fayllarını təmizlə
+    for old in glob.glob("/opt/bounty/batch_*.txt"):
+        os.remove(old)
 
     print(f"Nuclei: {len(domains)} domain → {len(batches)} batch ({BATCH_SIZE}/batch) parallel başladılır...")
 
