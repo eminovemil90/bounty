@@ -343,7 +343,7 @@ def run_nuclei(all_new_domains):
         return
 
     domains = sorted(normalized)
-    BATCH_SIZE = 10
+    BATCH_SIZE = 50
     batches = [domains[i:i+BATCH_SIZE] for i in range(0, len(domains), BATCH_SIZE)]
     results_file = "/opt/bounty/nuclei_results.txt"
 
