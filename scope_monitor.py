@@ -413,6 +413,72 @@ def get_bbp_names(filename, sha):
 
 NUCLEI_BIN = "/root/go/bin/nuclei"
 
+# ── Bug Bounty template strategiyası ────────────────────────────────────────
+#
+# PHASE 1 — "Quick Wins" (sürətli, yüksək tapılma ehtimalı)
+#   Bunlar HTTP-əsaslı, az request, tez cavab verən templatedir.
+#   Həmişə ödəyir: takeover, exposed secrets, default credentials, panels.
+#
+_BB_FAST_TAGS = (
+    "takeover,"        # subdomain takeover — DNS dangling, unclaimed services
+    "exposure,"        # .env, .git, backup fayllar, API keys, credentials
+    "default-login,"   # admin panel default şifrələri (admin:admin, vs.)
+    "panel,"           # exposed admin/management interfeyslər
+    "misconfig,"       # S3 bucket açıq, CORS wildcard, security headers yox
+    "token,"           # exposed JWT, OAuth token, API key response-da
+    "api"              # API endpoint misconfiguration, unauthenticated API
+)
+_BB_FAST_EXCLUDE = "dos,fuzz,headless,helpers,tech,info"
+
+# PHASE 2 — "Deep Scan" (dərin, daha ağır, yüksək ödəniş)
+#   Bu templateler daha çox request edir amma tapırsa payout yüksəkdir.
+#   RCE, SQLi, SSRF, auth bypass — triagerdə prioritet verilir.
+#
+_BB_DEEP_TAGS = (
+    "cve,"             # bütün CVE templateləri (xüsusilə son 2 ildəkilər)
+    "rce,"             # Remote Code Execution — ən yüksək ödəniş
+    "ssrf,"            # SSRF — cloud metadata, internal network
+    "sqli,"            # SQL Injection — data leak, auth bypass
+    "ssti,"            # Server-Side Template Injection → RCE-yə chain
+    "lfi,"             # Local File Inclusion — /etc/passwd, config fayllar
+    "xss,"             # Cross-Site Scripting — stored > reflected
+    "auth-bypass,"     # Authentication bypass — JWT, session, MFA
+    "redirect,"        # Open Redirect — OAuth token theft üçün chain
+    "injection,"       # Command injection, LDAP, XXE, header injection
+    "file-upload,"     # Unrestricted file upload → RCE
+    "idor"             # Insecure Direct Object Reference
+)
+_BB_DEEP_EXCLUDE = "dos,fuzz,headless,helpers,tech,info"
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def _launch_nuclei_batches(phase_name, live, batch_prefix,
+                            tags, exclude_tags,
+                            batch_size, timeout_sec, rate,
+                            results_file):
+    batches = [live[i:i+batch_size] for i in range(0, len(live), batch_size)]
+    print(f"Nuclei {phase_name}: {len(live)} domen → "
+          f"{len(batches)} batch ({batch_size}/batch), "
+          f"rate={rate}, timeout={timeout_sec}s")
+    for i, batch in enumerate(batches):
+        batch_file = f"/opt/bounty/{batch_prefix}_{i:03d}.txt"
+        with open(batch_file, "w") as f:
+            f.write("\n".join(batch) + "\n")
+        subprocess.Popen(
+            ["timeout", str(timeout_sec),
+             NUCLEI_BIN,
+             "-l", batch_file,
+             "-tags", tags,
+             "-severity", "critical,high,medium",
+             "-exclude-tags", exclude_tags,
+             "-o", results_file,
+             "-silent", "-timeout", "10",
+             "-retries", "2", "-rate-limit", str(rate)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+    return len(batches)
+
 
 def run_nuclei(all_new_domains):
     if not all_new_domains:
@@ -473,34 +539,31 @@ def run_nuclei(all_new_domains):
 
     print(f"httpx: {len(live)}/{len(normalized)} domen canlıdır → nuclei başladılır...")
 
-    BATCH_SIZE = 50
-    NUCLEI_TIMEOUT = 7200  # hər batch üçün max 2 saat
-    batches = [live[i:i+BATCH_SIZE] for i in range(0, len(live), BATCH_SIZE)]
     results_file = "/opt/bounty/nuclei_results.txt"
 
     # Köhnə batch fayllarını təmizlə
-    for old in glob.glob("/opt/bounty/batch_*.txt"):
+    for old in glob.glob("/opt/bounty/fast_*.txt") + glob.glob("/opt/bounty/deep_*.txt"):
         os.remove(old)
 
-    print(f"Nuclei: {len(live)} canlı domain → {len(batches)} batch ({BATCH_SIZE}/batch) parallel başladılır (timeout={NUCLEI_TIMEOUT}s)...")
+    # Phase 1: Quick Wins — böyük batch, yüksək rate, 45 dəq timeout
+    n1 = _launch_nuclei_batches(
+        "PHASE-1(quick)", live, "fast",
+        tags=_BB_FAST_TAGS,
+        exclude_tags=_BB_FAST_EXCLUDE,
+        batch_size=100, timeout_sec=2700, rate=50,
+        results_file=results_file,
+    )
 
-    for i, batch in enumerate(batches):
-        batch_file = f"/opt/bounty/batch_{i:03d}.txt"
-        with open(batch_file, "w") as f:
-            f.write("\n".join(batch) + "\n")
-        subprocess.Popen(
-            ["timeout", str(NUCLEI_TIMEOUT),
-             NUCLEI_BIN,
-             "-l", batch_file,
-             "-severity", "critical,high,medium",
-             "-o", results_file,
-             "-silent", "-timeout", "10",
-             "-retries", "2", "-rate-limit", "25"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
+    # Phase 2: Deep Scan — kiçik batch, aşağı rate, 2 saatlıq timeout
+    n2 = _launch_nuclei_batches(
+        "PHASE-2(deep)", live, "deep",
+        tags=_BB_DEEP_TAGS,
+        exclude_tags=_BB_DEEP_EXCLUDE,
+        batch_size=30, timeout_sec=7200, rate=25,
+        results_file=results_file,
+    )
 
-    print(f"{len(batches)} nuclei batch background-da başladıldı → nəticələr: {results_file}")
+    print(f"Nuclei başladıldı: {n1} fast batch + {n2} deep batch → {results_file}")
 
 
 def main():
