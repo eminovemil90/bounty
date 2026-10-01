@@ -328,6 +328,33 @@ def build_telegram_message(commits, domains_added, domains_removed,
     return "\n".join(lines)
 
 
+def get_bbp_names(filename, sha):
+    """Platform JSON-undan BBP proqram adlarını qaytarır. Xəta halında None (fail-open)."""
+    try:
+        text = fetch_raw_text(filename, sha)
+        data = json.loads(text)
+        bbp = set()
+        for prog in data:
+            name = prog.get("name", "")
+            if not name:
+                continue
+            if "offers_bounties" in prog:
+                if prog["offers_bounties"] is True:
+                    bbp.add(name)
+            elif "max_payout" in prog:
+                mp = prog.get("max_payout")
+                if mp and float(mp) > 0:
+                    bbp.add(name)
+            else:
+                if "vdp" not in name.lower():
+                    bbp.add(name)
+        print(f"BBP filtr ({filename}): {len(bbp)} BBP proqram tapıldı")
+        return bbp
+    except Exception as e:
+        print(f"BBP filtr xətası ({filename}): {e} — hamısı daxil edilir")
+        return None
+
+
 def run_nuclei(all_new_domains):
     if not all_new_domains:
         return
@@ -531,15 +558,24 @@ def main():
     # SHA-nı nuclei-dən ƏVVƏL yenilə (nuclei uğursuz olsa belə növbəti run düzgün işləsin)
     save_state({"last_sha": current_sha})
 
-    # ── Nuclei Scan ────────────────────────────────────────────────────────
+    # ── Nuclei Scan (yalnız BBP proqramları) ──────────────────────────────
+    h1_bbp  = get_bbp_names("data/hackerone_data.json",  current_sha)
+    bc_bbp  = get_bbp_names("data/bugcrowd_data.json",   current_sha)
+    ig_bbp  = get_bbp_names("data/intigriti_data.json",  current_sha)
+    ywh_bbp = get_bbp_names("data/yeswehack_data.json",  current_sha)
+
     all_new = set()
-    all_new.update(domains_added)
-    for info in (h1_new, bc_new, ig_new, ywh_new):
-        for pi in info.values():
-            all_new.update(pi.get("added", []))
-    for info in (h1_scope, bc_scope, ig_scope, ywh_scope):
-        for pi in info.values():
-            all_new.update(pi.get("added", []))
+    all_new.update(domains_added)  # domains.txt proqrama aid deyil — hamısını al
+    for info, bbp in [(h1_new,  h1_bbp),  (bc_new,  bc_bbp),
+                      (ig_new,  ig_bbp),  (ywh_new, ywh_bbp)]:
+        for name, pi in info.items():
+            if bbp is None or name in bbp:
+                all_new.update(pi.get("added", []))
+    for info, bbp in [(h1_scope,  h1_bbp),  (bc_scope,  bc_bbp),
+                      (ig_scope,  ig_bbp),  (ywh_scope, ywh_bbp)]:
+        for name, pi in info.items():
+            if bbp is None or name in bbp:
+                all_new.update(pi.get("added", []))
     run_nuclei(all_new)
 
 
