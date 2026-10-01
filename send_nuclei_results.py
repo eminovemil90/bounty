@@ -6,11 +6,18 @@ from dotenv import load_dotenv
 load_dotenv("/opt/bounty/.env")
 
 import os
+import subprocess
 import sys
 from scope_monitor import send_telegram, send_email
 
 RESULTS_FILE = "/opt/bounty/nuclei_results.txt"
 SENT_FILE = "/opt/bounty/nuclei_sent.txt"
+
+# Nuclei hələ işləyirsə gözlə — hamısı bitəndə bir dəfəlik göndər
+check = subprocess.run(["pgrep", "-f", "nuclei"], capture_output=True)
+if check.returncode == 0:
+    print("Nuclei prosesləri hələ işləyir — nəticələr tamamlanana qədər gözlənilir.")
+    sys.exit(0)
 
 if not os.path.exists(RESULTS_FILE):
     print("Nuclei results faylı yoxdur.")

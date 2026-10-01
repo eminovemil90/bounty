@@ -411,8 +411,15 @@ def get_bbp_names(filename, sha):
         return None
 
 
+NUCLEI_BIN = "/root/go/bin/nuclei"
+
+
 def run_nuclei(all_new_domains):
     if not all_new_domains:
+        return
+
+    if not os.path.exists(NUCLEI_BIN):
+        print(f"XƏTA: nuclei tapılmadı: {NUCLEI_BIN} — skan atlanır")
         return
 
     # Artıq işləyən nuclei proseslərini dayandır
@@ -483,7 +490,7 @@ def run_nuclei(all_new_domains):
             f.write("\n".join(batch) + "\n")
         subprocess.Popen(
             ["timeout", str(NUCLEI_TIMEOUT),
-             "/root/go/bin/nuclei",
+             NUCLEI_BIN,
              "-l", batch_file,
              "-severity", "critical,high,medium",
              "-o", results_file,
@@ -518,6 +525,11 @@ def main():
     compare = fetch(
         f"https://api.github.com/repos/{REPO}/compare/{last_sha}...{current_sha}"
     )
+
+    compare_status = compare.get("status", "")
+    if compare_status not in ("ahead", "identical", ""):
+        print(f"XƏBƏRDARLIQ: GitHub compare status='{compare_status}' — "
+              f"çox sayda commit olduqda fayl siyahısı natamam ola bilər")
 
     commits = compare.get("commits", [])
     files = {f["filename"]: f for f in compare.get("files", [])}
@@ -655,10 +667,11 @@ def main():
     save_state({"last_sha": current_sha})
 
     # ── Nuclei Scan (yalnız BBP proqramları) ──────────────────────────────
-    h1_bbp  = get_bbp_names("data/hackerone_data.json",  current_sha)
-    bc_bbp  = get_bbp_names("data/bugcrowd_data.json",   current_sha)
-    ig_bbp  = get_bbp_names("data/intigriti_data.json",  current_sha)
-    ywh_bbp = get_bbp_names("data/yeswehack_data.json",  current_sha)
+    # Dəyişiklik olmayan platformlar üçün JSON yükləmə (API quota qənaəti)
+    h1_bbp  = get_bbp_names("data/hackerone_data.json",  current_sha) if (h1_new  or h1_scope)  else None
+    bc_bbp  = get_bbp_names("data/bugcrowd_data.json",   current_sha) if (bc_new  or bc_scope)  else None
+    ig_bbp  = get_bbp_names("data/intigriti_data.json",  current_sha) if (ig_new  or ig_scope)  else None
+    ywh_bbp = get_bbp_names("data/yeswehack_data.json",  current_sha) if (ywh_new or ywh_scope) else None
 
     all_new = set()
     all_new.update(domains_added)
