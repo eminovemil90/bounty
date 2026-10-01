@@ -20,7 +20,7 @@ if not os.path.exists(RESULTS_FILE):
 sent = set()
 if os.path.exists(SENT_FILE):
     with open(SENT_FILE) as f:
-        sent = set(f.read().strip().split("\n"))
+        sent = {line.strip() for line in f if line.strip()}
 
 # Yeni tapıntıları tap
 with open(RESULTS_FILE) as f:
@@ -44,9 +44,10 @@ send_telegram(tg_text)
 email_body = f"Nuclei {len(new_findings)} yeni tapıntı tapdı:\n\n" + "\n".join(new_findings)
 send_email("🔍 Nuclei Nəticələri", email_body)
 
-# Göndərilənləri qeyd et
-with open(SENT_FILE, "a") as f:
-    for finding in new_findings:
-        f.write(finding + "\n")
+# Göndərilənləri qeyd et (bütün sent set-i yenidən yaz — dedup edilmiş)
+sent.update(new_findings)
+with open(SENT_FILE, "w") as f:
+    for line in sorted(sent):
+        f.write(line + "\n")
 
 print("Nəticələr göndərildi.")

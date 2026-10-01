@@ -2,11 +2,13 @@ from dotenv import load_dotenv
 load_dotenv("/opt/bounty/.env")
 
 import glob
+import html
 import json
 import os
 import re
 import smtplib
 import subprocess
+import time
 import urllib.request
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -18,12 +20,28 @@ GMAIL_USER = "eminovemil90@gmail.com"
 GMAIL_PASS = os.environ.get("GMAIL_APP_PASSWORD")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
 
-def fetch(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "bounty-monitor/1.0"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read())
+def _make_headers():
+    h = {"User-Agent": "bounty-monitor/1.0"}
+    if GITHUB_TOKEN:
+        h["Authorization"] = f"token {GITHUB_TOKEN}"
+    return h
+
+
+def fetch(url, retries=3):
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers=_make_headers())
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.loads(r.read())
+        except Exception as e:
+            if attempt == retries - 1:
+                raise
+            wait = 2 ** attempt
+            print(f"fetch xətası ({url[:60]}): {e} — {wait}s sonra yenidən...")
+            time.sleep(wait)
 
 
 def load_state():
@@ -38,11 +56,19 @@ def save_state(data):
         json.dump(data, f, indent=2)
 
 
-def fetch_raw_text(path, sha):
+def fetch_raw_text(path, sha, retries=3):
     url = f"https://raw.githubusercontent.com/{REPO}/{sha}/{path}"
-    req = urllib.request.Request(url, headers={"User-Agent": "bounty-monitor/1.0"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return r.read().decode("utf-8")
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers=_make_headers())
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return r.read().decode("utf-8")
+        except Exception as e:
+            if attempt == retries - 1:
+                raise
+            wait = 2 ** attempt
+            print(f"fetch_raw_text xətası ({path}): {e} — {wait}s sonra yenidən...")
+            time.sleep(wait)
 
 
 def diff_platform_scopes(old_text, new_text, scope_field):
@@ -290,33 +316,33 @@ def build_telegram_message(commits, domains_added, domains_removed,
     for label, new_progs, removed_progs, scope_changes in platforms:
         for name, info in new_progs.items():
             scopes = info.get("added", [])
-            lines.append(f"🆕 <b>YENİ ({label}):</b> {name}")
+            lines.append(f"🆕 <b>YENİ ({label}):</b> {html.escape(name)}")
             for s in scopes[:5]:
-                lines.append(f"  + {s}")
+                lines.append(f"  + {html.escape(s)}")
             if len(scopes) > 5:
                 lines.append(f"  ... +{len(scopes)-5} daha scope")
         for name, info in scope_changes.items():
             added = info.get("added", [])
             if added:
-                lines.append(f"📋 <b>{label} — {name}:</b>")
+                lines.append(f"📋 <b>{label} — {html.escape(name)}:</b>")
                 for s in added[:5]:
-                    lines.append(f"  + {s}")
+                    lines.append(f"  + {html.escape(s)}")
                 if len(added) > 5:
                     lines.append(f"  ... +{len(added)-5} daha")
         for name in removed_progs:
-            lines.append(f"❌ <b>({label}) silindi:</b> {name}")
+            lines.append(f"❌ <b>({label}) silindi:</b> {html.escape(name)}")
 
     if domains_added:
         lines.append(f"\n✅ <b>Yeni domenler (+{len(domains_added)}):</b>")
         for d in domains_added[:10]:
-            lines.append(f"  + {d}")
+            lines.append(f"  + {html.escape(d)}")
         if len(domains_added) > 10:
             lines.append(f"  ... +{len(domains_added)-10} daha")
 
     if wildcards_added:
         lines.append(f"\n🌐 <b>Yeni wildcard-lar (+{len(wildcards_added)}):</b>")
         for w in wildcards_added[:10]:
-            lines.append(f"  + {w}")
+            lines.append(f"  + {html.escape(w)}")
         if len(wildcards_added) > 10:
             lines.append(f"  ... +{len(wildcards_added)-10} daha")
 
@@ -343,7 +369,7 @@ def get_bbp_names(filename, sha):
                     bbp.add(name)
             elif "max_payout" in prog:
                 mp = prog.get("max_payout")
-                if mp and float(mp) > 0:
+                if mp not in (None, 0, "0", "", "null"):
                     bbp.add(name)
             else:
                 if "vdp" not in name.lower():
@@ -359,6 +385,13 @@ def run_nuclei(all_new_domains):
     if not all_new_domains:
         return
 
+    # Artıq işləyən nuclei proseslərini dayandır
+    check = subprocess.run(["pgrep", "-f", "nuclei"], capture_output=True)
+    if check.returncode == 0:
+        print("Köhnə nuclei prosesləri tapıldı, dayandırılır...")
+        subprocess.run(["pkill", "-f", "nuclei"], capture_output=True)
+        time.sleep(3)
+
     normalized = set()
     for d in all_new_domains:
         d = d.lstrip("*.")
@@ -370,23 +403,32 @@ def run_nuclei(all_new_domains):
     if not normalized:
         return
 
-    # httpx ilə canlı domenləri filtrə
     all_domains_file = "/opt/bounty/all_domains.txt"
     live_domains_file = "/opt/bounty/live_domains.txt"
+
+    if os.path.exists(live_domains_file):
+        os.remove(live_domains_file)
+
     with open(all_domains_file, "w") as f:
         f.write("\n".join(sorted(normalized)) + "\n")
 
     print(f"httpx: {len(normalized)} domain yoxlanır...")
     try:
-        result = subprocess.run(
+        subprocess.run(
             ["httpx", "-l", all_domains_file, "-silent", "-o", live_domains_file,
              "-timeout", "5", "-threads", "50", "-rate-limit", "100"],
             timeout=300, capture_output=True
         )
-        with open(live_domains_file) as f:
-            live = [l.strip() for l in f if l.strip()]
-    except Exception:
-        live = sorted(normalized)
+    except Exception as e:
+        print(f"httpx xətası: {e} — nuclei atlanır (dead domainlərə skan edilmir).")
+        return
+
+    if not os.path.exists(live_domains_file):
+        print("httpx: heç bir canlı domen tapılmadı, nuclei atlanır.")
+        return
+
+    with open(live_domains_file) as f:
+        live = [l.strip() for l in f if l.strip()]
 
     if not live:
         print("httpx: heç bir canlı domen tapılmadı, nuclei atlanır.")
@@ -395,6 +437,7 @@ def run_nuclei(all_new_domains):
     print(f"httpx: {len(live)}/{len(normalized)} domen canlıdır → nuclei başladılır...")
 
     BATCH_SIZE = 50
+    NUCLEI_TIMEOUT = 7200  # hər batch üçün max 2 saat
     batches = [live[i:i+BATCH_SIZE] for i in range(0, len(live), BATCH_SIZE)]
     results_file = "/opt/bounty/nuclei_results.txt"
 
@@ -402,14 +445,15 @@ def run_nuclei(all_new_domains):
     for old in glob.glob("/opt/bounty/batch_*.txt"):
         os.remove(old)
 
-    print(f"Nuclei: {len(live)} canlı domain → {len(batches)} batch ({BATCH_SIZE}/batch) parallel başladılır...")
+    print(f"Nuclei: {len(live)} canlı domain → {len(batches)} batch ({BATCH_SIZE}/batch) parallel başladılır (timeout={NUCLEI_TIMEOUT}s)...")
 
     for i, batch in enumerate(batches):
         batch_file = f"/opt/bounty/batch_{i:03d}.txt"
         with open(batch_file, "w") as f:
             f.write("\n".join(batch) + "\n")
         subprocess.Popen(
-            ["/root/go/bin/nuclei",
+            ["timeout", str(NUCLEI_TIMEOUT),
+             "/root/go/bin/nuclei",
              "-l", batch_file,
              "-severity", "critical,high,medium",
              "-o", results_file,
@@ -565,7 +609,8 @@ def main():
     ywh_bbp = get_bbp_names("data/yeswehack_data.json",  current_sha)
 
     all_new = set()
-    all_new.update(domains_added)  # domains.txt proqrama aid deyil — hamısını al
+    all_new.update(domains_added)
+    all_new.update(wildcards_added)  # *.target.com → run_nuclei içdə lstrip("*.") olur
     for info, bbp in [(h1_new,  h1_bbp),  (bc_new,  bc_bbp),
                       (ig_new,  ig_bbp),  (ywh_new, ywh_bbp)]:
         for name, pi in info.items():
