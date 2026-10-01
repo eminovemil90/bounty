@@ -3,6 +3,7 @@ load_dotenv("/opt/bounty/.env")
 
 import glob
 import html
+import ipaddress
 import json
 import os
 import re
@@ -46,8 +47,11 @@ def fetch(url, retries=3):
 
 def load_state():
     if os.path.exists(STATE_FILE):
-        with open(STATE_FILE) as f:
-            return json.load(f)
+        try:
+            with open(STATE_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"state.json oxuna bilmədi: {e} — sıfırdan başlanır")
     return {"last_sha": None}
 
 
@@ -132,6 +136,12 @@ def parse_patch_lines(patch):
     return added, removed
 
 
+def diff_plain_text(old_text, new_text):
+    old_lines = {l.strip() for l in old_text.split("\n") if l.strip()}
+    new_lines = {l.strip() for l in new_text.split("\n") if l.strip()}
+    return sorted(new_lines - old_lines), sorted(old_lines - new_lines)
+
+
 _REVERSED_TLDS = {
     "com", "org", "io", "net", "gov", "edu",
     "de", "fr", "uk", "jp", "cn", "ru", "br", "in", "us",
@@ -148,6 +158,21 @@ _NON_WEB_URL_PATTERNS = (
 _MOBILE_SEGMENTS = {"android", "ios"}
 
 
+def _is_non_public_ip(val):
+    host = val.split(":")[0].strip("[]")
+    try:
+        addr = ipaddress.ip_address(host)
+        return not addr.is_global
+    except ValueError:
+        pass
+    try:
+        net = ipaddress.ip_network(val, strict=False)
+        return not net.is_global
+    except ValueError:
+        pass
+    return False
+
+
 def is_web_scope(val):
     if not val:
         return False
@@ -159,6 +184,8 @@ def is_web_scope(val):
             return False
         return True
     if "." not in val:
+        return False
+    if _is_non_public_ip(val):
         return False
     parts = val.split(".")
     if (len(parts) >= 2
@@ -195,7 +222,7 @@ def parse_platform_patch(patch, scope_field):
         nm = name_re.search(content)
         if nm:
             current_name = nm.group(1).strip()
-            data.setdefault(current_name, {"added": [], "removed": []})
+            data.setdefault(current_name, {"added": set(), "removed": set()})
             if prefix == "+":
                 name_added.add(current_name)
             elif prefix == "-":
@@ -207,13 +234,16 @@ def parse_platform_patch(patch, scope_field):
                 val = sm.group(1).strip()
                 if val and is_web_scope(val):
                     key = "added" if prefix == "+" else "removed"
-                    data[current_name][key].append(val)
+                    data[current_name][key].add(val)
 
-    truly_new = {n: data[n] for n in (name_added - name_removed)
+    def _to_lists(d):
+        return {"added": sorted(d["added"]), "removed": sorted(d["removed"])}
+
+    truly_new = {n: _to_lists(data[n]) for n in (name_added - name_removed)
                  if n in data and data[n]["added"]}
-    truly_removed = {n: data[n] for n in (name_removed - name_added) if n in data}
+    truly_removed = {n: _to_lists(data[n]) for n in (name_removed - name_added) if n in data}
     scope_changes = {
-        n: data[n]
+        n: _to_lists(data[n])
         for n in data
         if n not in (name_added - name_removed)
         and n not in (name_removed - name_added)
@@ -496,13 +526,32 @@ def main():
     wildcards_added, wildcards_removed = [], []
 
     if "data/domains.txt" in files:
-        domains_added, domains_removed = parse_patch_lines(
-            files["data/domains.txt"].get("patch", "")
-        )
+        patch = files["data/domains.txt"].get("patch", "")
+        if patch:
+            domains_added, domains_removed = parse_patch_lines(patch)
+        else:
+            print("data/domains.txt: patch yoxdur, raw diff istifadə olunur...")
+            try:
+                domains_added, domains_removed = diff_plain_text(
+                    fetch_raw_text("data/domains.txt", last_sha),
+                    fetch_raw_text("data/domains.txt", current_sha),
+                )
+            except Exception as e:
+                print(f"data/domains.txt raw diff xətası: {e}")
+
     if "data/wildcards.txt" in files:
-        wildcards_added, wildcards_removed = parse_patch_lines(
-            files["data/wildcards.txt"].get("patch", "")
-        )
+        patch = files["data/wildcards.txt"].get("patch", "")
+        if patch:
+            wildcards_added, wildcards_removed = parse_patch_lines(patch)
+        else:
+            print("data/wildcards.txt: patch yoxdur, raw diff istifadə olunur...")
+            try:
+                wildcards_added, wildcards_removed = diff_plain_text(
+                    fetch_raw_text("data/wildcards.txt", last_sha),
+                    fetch_raw_text("data/wildcards.txt", current_sha),
+                )
+            except Exception as e:
+                print(f"data/wildcards.txt raw diff xətası: {e}")
 
     h1_new, h1_removed, h1_scope, h1_stats = {}, {}, {}, (0, 0)
     bc_new, bc_removed, bc_scope, bc_stats = {}, {}, {}, (0, 0)
@@ -584,7 +633,10 @@ def main():
     L.append("Mənbə: https://github.com/arkadiyt/bounty-targets-data")
     L.append(f"Commits: {last_sha[:7]}...{current_sha[:7]}")
 
-    send_email(subject, "\n".join(L))
+    try:
+        send_email(subject, "\n".join(L))
+    except Exception as e:
+        print(f"Email göndərmə xətası: {e}")
 
     platforms = [
         ("H1", h1_new, h1_removed, h1_scope),
