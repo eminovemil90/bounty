@@ -343,16 +343,39 @@ def run_nuclei(all_new_domains):
     if not normalized:
         return
 
-    domains = sorted(normalized)
+    # httpx ilə canlı domenləri filtrə
+    all_domains_file = "/opt/bounty/all_domains.txt"
+    live_domains_file = "/opt/bounty/live_domains.txt"
+    with open(all_domains_file, "w") as f:
+        f.write("\n".join(sorted(normalized)) + "\n")
+
+    print(f"httpx: {len(normalized)} domain yoxlanır...")
+    try:
+        result = subprocess.run(
+            ["httpx", "-l", all_domains_file, "-silent", "-o", live_domains_file,
+             "-timeout", "5", "-threads", "50", "-rate-limit", "100"],
+            timeout=300, capture_output=True
+        )
+        with open(live_domains_file) as f:
+            live = [l.strip() for l in f if l.strip()]
+    except Exception:
+        live = sorted(normalized)
+
+    if not live:
+        print("httpx: heç bir canlı domen tapılmadı, nuclei atlanır.")
+        return
+
+    print(f"httpx: {len(live)}/{len(normalized)} domen canlıdır → nuclei başladılır...")
+
     BATCH_SIZE = 50
-    batches = [domains[i:i+BATCH_SIZE] for i in range(0, len(domains), BATCH_SIZE)]
+    batches = [live[i:i+BATCH_SIZE] for i in range(0, len(live), BATCH_SIZE)]
     results_file = "/opt/bounty/nuclei_results.txt"
 
     # Köhnə batch fayllarını təmizlə
     for old in glob.glob("/opt/bounty/batch_*.txt"):
         os.remove(old)
 
-    print(f"Nuclei: {len(domains)} domain → {len(batches)} batch ({BATCH_SIZE}/batch) parallel başladılır...")
+    print(f"Nuclei: {len(live)} canlı domain → {len(batches)} batch ({BATCH_SIZE}/batch) parallel başladılır...")
 
     for i, batch in enumerate(batches):
         batch_file = f"/opt/bounty/batch_{i:03d}.txt"
