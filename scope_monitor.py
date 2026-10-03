@@ -412,6 +412,7 @@ def get_bbp_names(filename, sha):
 
 
 NUCLEI_BIN = "/root/go/bin/nuclei"
+HTTPX_BIN  = "/root/go/bin/httpx"
 
 # ── Bug Bounty template strategiyası ────────────────────────────────────────
 #
@@ -487,6 +488,9 @@ def run_nuclei(all_new_domains):
     if not os.path.exists(NUCLEI_BIN):
         print(f"XƏTA: nuclei tapılmadı: {NUCLEI_BIN} — skan atlanır")
         return
+    if not os.path.exists(HTTPX_BIN):
+        print(f"XƏTA: httpx tapılmadı: {HTTPX_BIN} — skan atlanır")
+        return
 
     # Artıq işləyən nuclei proseslərini dayandır
     check = subprocess.run(["pgrep", "-f", "nuclei"], capture_output=True)
@@ -518,7 +522,7 @@ def run_nuclei(all_new_domains):
     print(f"httpx: {len(normalized)} domain yoxlanır...")
     try:
         subprocess.run(
-            ["httpx", "-l", all_domains_file, "-silent", "-o", live_domains_file,
+            [HTTPX_BIN, "-l", all_domains_file, "-silent", "-o", live_domains_file,
              "-timeout", "5", "-threads", "50", "-rate-limit", "100"],
             timeout=300, capture_output=True
         )
