@@ -218,7 +218,8 @@ python3 scope_monitor.py
 python3 send_nuclei_results.py
 ```
 
----
+---<img width="987" height="850" alt="image" src="https://github.com/user-attachments/assets/f415e358-0429-43ce-a758-08d97f4e6974" />
+
 
 ## Texniki Detallar
 
@@ -239,3 +240,5 @@ python-dotenv
 nuclei     (/root/go/bin/nuclei)
 httpx      (PATH-da olmalıdır)
 ```
+
+![Uploading image.png…]()
