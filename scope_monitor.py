@@ -23,13 +23,11 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
-
 def _make_headers():
     h = {"User-Agent": "bounty-monitor/1.0"}
     if GITHUB_TOKEN:
         h["Authorization"] = f"token {GITHUB_TOKEN}"
     return h
-
 
 def fetch(url, retries=3):
     for attempt in range(retries):
@@ -44,7 +42,6 @@ def fetch(url, retries=3):
             print(f"fetch xətası ({url[:60]}): {e} — {wait}s sonra yenidən...")
             time.sleep(wait)
 
-
 def load_state():
     if os.path.exists(STATE_FILE):
         try:
@@ -54,11 +51,9 @@ def load_state():
             print(f"state.json oxuna bilmədi: {e} — sıfırdan başlanır")
     return {"last_sha": None}
 
-
 def save_state(data):
     with open(STATE_FILE, "w") as f:
         json.dump(data, f, indent=2)
-
 
 def fetch_raw_text(path, sha, retries=3):
     url = f"https://raw.githubusercontent.com/{REPO}/{sha}/{path}"
@@ -73,7 +68,6 @@ def fetch_raw_text(path, sha, retries=3):
             wait = 2 ** attempt
             print(f"fetch_raw_text xətası ({path}): {e} — {wait}s sonra yenidən...")
             time.sleep(wait)
-
 
 def diff_platform_scopes(old_text, new_text, scope_field):
     name_re = re.compile(r'"name"\s*:\s*"([^"]+)"')
@@ -119,7 +113,6 @@ def diff_platform_scopes(old_text, new_text, scope_field):
 
     return new_progs, removed_progs, scope_changes
 
-
 def parse_patch_lines(patch):
     added, removed = [], []
     if not patch:
@@ -135,12 +128,10 @@ def parse_patch_lines(patch):
                 removed.append(val)
     return added, removed
 
-
 def diff_plain_text(old_text, new_text):
     old_lines = {l.strip() for l in old_text.split("\n") if l.strip()}
     new_lines = {l.strip() for l in new_text.split("\n") if l.strip()}
     return sorted(new_lines - old_lines), sorted(old_lines - new_lines)
-
 
 _REVERSED_TLDS = {
     "com", "org", "io", "net", "gov", "edu",
@@ -157,7 +148,6 @@ _NON_WEB_URL_PATTERNS = (
 
 _MOBILE_SEGMENTS = {"android", "ios"}
 
-
 def _is_non_public_ip(val):
     host = val.split(":")[0].strip("[]")
     try:
@@ -171,7 +161,6 @@ def _is_non_public_ip(val):
     except ValueError:
         pass
     return False
-
 
 def is_web_scope(val):
     if not val:
@@ -199,7 +188,6 @@ def is_web_scope(val):
             and ":" not in val):
         return False
     return True
-
 
 def parse_platform_patch(patch, scope_field):
     if not patch:
@@ -251,7 +239,6 @@ def parse_platform_patch(patch, scope_field):
     }
     return truly_new, truly_removed, scope_changes
 
-
 def _format_platform_section(title, new_progs, removed_progs, scope_changes, stats):
     if not stats[0] and not stats[1]:
         return []
@@ -292,7 +279,6 @@ def _format_platform_section(title, new_progs, removed_progs, scope_changes, sta
     L.append(f"Fayl dəyişikliyi: +{stats[0]} / -{stats[1]} sətir")
     return L
 
-
 def send_email(subject, body):
     if not GMAIL_PASS:
         print("GMAIL_APP_PASSWORD not set — skipping email")
@@ -306,7 +292,6 @@ def send_email(subject, body):
         server.login(GMAIL_USER, GMAIL_PASS)
         server.send_message(msg)
     print(f"Email göndərildi: {subject}")
-
 
 def send_telegram(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -335,7 +320,6 @@ def send_telegram(text):
                 print(f"Telegram xətası: {resp}")
         except Exception as e:
             print(f"Telegram xətası: {e}")
-
 
 def build_telegram_message(commits, domains_added, domains_removed,
                             wildcards_added, wildcards_removed,
@@ -377,12 +361,11 @@ def build_telegram_message(commits, domains_added, domains_removed,
             lines.append(f"  ... +{len(wildcards_added)-10} daha")
 
     if domains_removed:
-        lines.append(f"\n🗑 Silindi: {len(domains_removed)} domen")
+        lines.append(f"🗑 Silindi: {len(domains_removed)} domen")
     if wildcards_removed:
         lines.append(f"🗑 Silindi: {len(wildcards_removed)} wildcard")
 
     return "\n".join(lines)
-
 
 def get_bbp_names(filename, sha):
     """Platform JSON-undan BBP proqram adlarını qaytarır. Xəta halında None (fail-open)."""
@@ -410,48 +393,37 @@ def get_bbp_names(filename, sha):
         print(f"BBP filtr xətası ({filename}): {e} — hamısı daxil edilir")
         return None
 
-
 NUCLEI_BIN = "/root/go/bin/nuclei"
 HTTPX_BIN  = "/root/go/bin/httpx"
 
 # ── Bug Bounty template strategiyası ────────────────────────────────────────
-#
-# PHASE 1 — "Quick Wins" (sürətli, yüksək tapılma ehtimalı)
-#   Bunlar HTTP-əsaslı, az request, tez cavab verən templatedir.
-#   Həmişə ödəyir: takeover, exposed secrets, default credentials, panels.
-#
 _BB_FAST_TAGS = (
-    "takeover,"        # subdomain takeover — DNS dangling, unclaimed services
-    "exposure,"        # .env, .git, backup fayllar, API keys, credentials
-    "default-login,"   # admin panel default şifrələri (admin:admin, vs.)
-    "panel,"           # exposed admin/management interfeyslər
-    "misconfig,"       # S3 bucket açıq, CORS wildcard, security headers yox
-    "token,"           # exposed JWT, OAuth token, API key response-da
-    "api"              # API endpoint misconfiguration, unauthenticated API
+    "takeover,"
+    "exposure,"
+    "default-login,"
+    "panel,"
+    "misconfig,"
+    "token,"
+    "api"
 )
 _BB_FAST_EXCLUDE = "dos,fuzz,headless,helpers,tech,info"
 
-# PHASE 2 — "Deep Scan" (dərin, daha ağır, yüksək ödəniş)
-#   Bu templateler daha çox request edir amma tapırsa payout yüksəkdir.
-#   RCE, SQLi, SSRF, auth bypass — triagerdə prioritet verilir.
-#
 _BB_DEEP_TAGS = (
-    "cve,"             # bütün CVE templateləri (xüsusilə son 2 ildəkilər)
-    "rce,"             # Remote Code Execution — ən yüksək ödəniş
-    "ssrf,"            # SSRF — cloud metadata, internal network
-    "sqli,"            # SQL Injection — data leak, auth bypass
-    "ssti,"            # Server-Side Template Injection → RCE-yə chain
-    "lfi,"             # Local File Inclusion — /etc/passwd, config fayllar
-    "xss,"             # Cross-Site Scripting — stored > reflected
-    "auth-bypass,"     # Authentication bypass — JWT, session, MFA
-    "redirect,"        # Open Redirect — OAuth token theft üçün chain
-    "injection,"       # Command injection, LDAP, XXE, header injection
-    "file-upload,"     # Unrestricted file upload → RCE
-    "idor"             # Insecure Direct Object Reference
+    "cve,"
+    "rce,"
+    "ssrf,"
+    "sqli,"
+    "ssti,"
+    "lfi,"
+    "xss,"
+    "auth-bypass,"
+    "redirect,"
+    "injection,"
+    "file-upload,"
+    "idor"
 )
 _BB_DEEP_EXCLUDE = "dos,fuzz,headless,helpers,tech,info"
 # ────────────────────────────────────────────────────────────────────────────
-
 
 def _launch_nuclei_batches(phase_name, live, batch_prefix,
                             tags, exclude_tags,
@@ -465,7 +437,8 @@ def _launch_nuclei_batches(phase_name, live, batch_prefix,
         batch_file = f"/opt/bounty/{batch_prefix}_{i:03d}.txt"
         with open(batch_file, "w") as f:
             f.write("\n".join(batch) + "\n")
-        subprocess.Popen(
+        print(f"  [{phase_name}] batch {i+1}/{len(batches)} başladı ({len(batch)} domen)...")
+        result = subprocess.run(
             ["timeout", str(timeout_sec),
              NUCLEI_BIN,
              "-l", batch_file,
@@ -474,12 +447,24 @@ def _launch_nuclei_batches(phase_name, live, batch_prefix,
              "-exclude-tags", exclude_tags,
              "-o", results_file,
              "-silent", "-timeout", "10",
-             "-retries", "2", "-rate-limit", str(rate)],
+             "-retries", "2", "-rate-limit", str(rate),
+             "-c", "15", "-bs", "15",
+             "-stream"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
+        exit_code = result.returncode
+        if exit_code == 124:
+            print(f"  [{phase_name}] batch {i+1} timeout ilə bitdi (limit: {timeout_sec}s)")
+        elif exit_code != 0:
+            print(f"  [{phase_name}] batch {i+1} exit code: {exit_code}")
+        else:
+            print(f"  [{phase_name}] batch {i+1}/{len(batches)} tamamlandı")
+        try:
+            os.remove(batch_file)
+        except OSError:
+            pass
     return len(batches)
-
 
 def run_nuclei(all_new_domains):
     if not all_new_domains:
@@ -492,7 +477,6 @@ def run_nuclei(all_new_domains):
         print(f"XƏTA: httpx tapılmadı: {HTTPX_BIN} — skan atlanır")
         return
 
-    # Artıq işləyən nuclei proseslərini dayandır
     check = subprocess.run(["pgrep", "-f", "nuclei"], capture_output=True)
     if check.returncode == 0:
         print("Köhnə nuclei prosesləri tapıldı, dayandırılır...")
@@ -545,11 +529,9 @@ def run_nuclei(all_new_domains):
 
     results_file = "/opt/bounty/nuclei_results.txt"
 
-    # Köhnə batch fayllarını təmizlə
     for old in glob.glob("/opt/bounty/fast_*.txt") + glob.glob("/opt/bounty/deep_*.txt"):
         os.remove(old)
 
-    # Phase 1: Quick Wins — böyük batch, yüksək rate, 45 dəq timeout
     n1 = _launch_nuclei_batches(
         "PHASE-1(quick)", live, "fast",
         tags=_BB_FAST_TAGS,
@@ -558,7 +540,6 @@ def run_nuclei(all_new_domains):
         results_file=results_file,
     )
 
-    # Phase 2: Deep Scan — kiçik batch, aşağı rate, 2 saatlıq timeout
     n2 = _launch_nuclei_batches(
         "PHASE-2(deep)", live, "deep",
         tags=_BB_DEEP_TAGS,
@@ -567,8 +548,7 @@ def run_nuclei(all_new_domains):
         results_file=results_file,
     )
 
-    print(f"Nuclei başladıldı: {n1} fast batch + {n2} deep batch → {results_file}")
-
+    print(f"Nuclei tamamlandı: {n1} fast batch + {n2} deep batch → {results_file}")
 
 def main():
     state = load_state()
@@ -730,11 +710,8 @@ def main():
     )
     send_telegram(tg_text)
 
-    # SHA-nı nuclei-dən ƏVVƏL yenilə (nuclei uğursuz olsa belə növbəti run düzgün işləsin)
     save_state({"last_sha": current_sha})
 
-    # ── Nuclei Scan (yalnız BBP proqramları) ──────────────────────────────
-    # Dəyişiklik olmayan platformlar üçün JSON yükləmə (API quota qənaəti)
     h1_bbp  = get_bbp_names("data/hackerone_data.json",  current_sha) if (h1_new  or h1_scope)  else None
     bc_bbp  = get_bbp_names("data/bugcrowd_data.json",   current_sha) if (bc_new  or bc_scope)  else None
     ig_bbp  = get_bbp_names("data/intigriti_data.json",  current_sha) if (ig_new  or ig_scope)  else None
@@ -742,7 +719,7 @@ def main():
 
     all_new = set()
     all_new.update(domains_added)
-    all_new.update(wildcards_added)  # *.target.com → run_nuclei içdə lstrip("*.") olur
+    all_new.update(wildcards_added)
     for info, bbp in [(h1_new,  h1_bbp),  (bc_new,  bc_bbp),
                       (ig_new,  ig_bbp),  (ywh_new, ywh_bbp)]:
         for name, pi in info.items():
@@ -754,7 +731,6 @@ def main():
             if bbp is None or name in bbp:
                 all_new.update(pi.get("added", []))
     run_nuclei(all_new)
-
 
 if __name__ == "__main__":
     main()
